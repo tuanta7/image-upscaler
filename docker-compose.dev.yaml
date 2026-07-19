@@ -1,0 +1,58 @@
+name: image-upscaler
+services:
+  postgres:
+    container_name: image-upscaler-postgres
+    image: postgres:18.4
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: upscaler
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d upscaler"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    container_name: image-upscaler-redis
+    image: redis:8.8.0
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  minio:
+    container_name: image-upscaler-minio
+    image: minio/minio:RELEASE.2025-05-24T17-08-30Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: password
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # admin console (http://localhost:9001)
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  rabbitmq:
+    container_name: image-upscaler-rabbitmq
+    image: rabbitmq:4.3.2-management
+    environment:
+      RABBITMQ_DEFAULT_USER: rabbitmq
+      RABBITMQ_DEFAULT_PASS: password
+    ports:
+      - "5672:5672" # AMQP
+      - "15672:15672" # management UI (http://localhost:15672)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

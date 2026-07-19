@@ -1,3 +1,4 @@
+boto3==1.43.51
 cuda-bindings==13.3.1
 cuda-pathfinder==1.5.6
 cuda-toolkit==13.0.3.0
@@ -24,6 +25,7 @@ nvidia-nvjitlink==13.3.33
 nvidia-nvshmem-cu13==3.4.5
 nvidia-nvtx==13.0.85
 opencv-python==5.0.0.93
+pika==1.4.1
 setuptools==83.0.0
 sympy==1.14.0
 torch==2.13.0
