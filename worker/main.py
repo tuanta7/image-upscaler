@@ -12,6 +12,7 @@ Expected task message (JSON):
 """
 
 import logging
+import os
 
 from app.consumer import Consumer
 from app.storage_client import Storage
@@ -41,11 +42,14 @@ def main():
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    log.info("starting worker (pid %d)", os.getpid())
+
     storage = Storage()
     storage.ensure_bucket()
 
     # Load the model once at startup, not once per task.
     upscaler = Upscaler()
+    log.info("worker ready")
 
     consumer = (Consumer(handler=make_handler(storage, upscaler)))
     consumer.run()

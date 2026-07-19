@@ -127,17 +127,17 @@ if __name__ == "__main__":
     parser.add_argument("input", help="image to upscale")
     parser.add_argument("output", help="where to save the result")
     parser.add_argument("--scale", type=int, default=UPSCALE_SCALE, choices=[2, 3, 4])
-    parser.add_argument("--weights", default=WEIGHTS_PATH,
-                        help="the trained model file (.pth)")
+    parser.add_argument("--weights", default=WEIGHTS_PATH, help="the trained model file (.pth)")
     args = parser.parse_args()
 
     upscaler = Upscaler(scale=args.scale, weights=args.weights)
 
-    image = cv2.imread(args.input)
-    if image is None:
+    originalImage = cv2.imread(args.input)
+    if  originalImage is None:
         raise SystemExit(f"could not read image: {args.input}")
 
-    result = upscaler.upscale(image)
-    cv2.imwrite(args.output, result)
+    upscaledImage = upscaler.upscale(originalImage)
+    cv2.imwrite(args.output, upscaledImage)
+
     print(f"saved {args.output} "
-          f"({image.shape[1]}x{image.shape[0]} -> {result.shape[1]}x{result.shape[0]})")
+          f"({originalImage.shape[1]}x{originalImage.shape[0]} -> {upscaledImage.shape[1]}x{upscaledImage.shape[0]})")

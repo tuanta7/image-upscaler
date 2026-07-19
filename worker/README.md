@@ -8,7 +8,7 @@ Try it standalone, all pre-trained weights are from https://github.com/yjn870/FS
 python -m app.upscale_handler photo.png photo_big.png --scale 3 --weights fsrcnn_x3.pth
 ```
 
-## Concepts
+## FSRCNN Concepts
 
 - **Model/Neural Network**: A function with millions of adjustable numbers (parameters) inside. You feed it an input (a small image), it produces an output (a bigger image). In code it's the `FSRCNN` class — a pipeline of layers the input flows through.
 - **Weights**: The learned values of those parameters.

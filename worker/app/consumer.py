@@ -34,7 +34,11 @@ class Consumer:
         # without the broker deciding we are dead mid-task.
         params = pika.URLParameters(self.url)
         params.heartbeat = 600
+
+        # Log host/port only -- the full URL contains credentials.
+        log.info("connecting to RabbitMQ at %s:%s", params.host, params.port)
         connection = pika.BlockingConnection(params)
+        log.info("connected to RabbitMQ")
         channel = connection.channel()
 
         # durable=True: tasks survive a broker restart.
@@ -44,14 +48,14 @@ class Consumer:
         # busy with one. This is what spreads work across workers.
         channel.basic_qos(prefetch_count=1)
 
-        channel.basic_consume(queue=self.queue, on_message_callback=self._on_message)
+        channel.basic_consume(queue=self.queue, on_message_callback=self._process)
         log.info("waiting for tasks on queue %r", self.queue)
         try:
             channel.start_consuming()
         finally:
             connection.close()
 
-    def _on_message(self, channel, method, properties, body):
+    def _process(self, channel, method, properties, body):
         try:
             task = json.loads(body)
         except ValueError:
@@ -74,4 +78,5 @@ class Consumer:
 if __name__ == "__main__":
     # Standalone smoke test: just print whatever tasks arrive.
     logging.basicConfig(level=logging.INFO)
-    Consumer(handler=lambda task: log.info("got task: %s", task)).run()
+    consumer = Consumer(handler=lambda task: log.info("got task: %s", task))
+    consumer.run()

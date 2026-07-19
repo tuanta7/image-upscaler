@@ -23,6 +23,7 @@ class Storage:
         bucket=S3_BUCKET,
     ):
         self.bucket = bucket
+        log.info("connecting to S3 at %s (bucket %r)", endpoint, bucket)
         self.client = boto3.client(
             "s3", #
             endpoint_url=endpoint,
@@ -41,7 +42,10 @@ class Storage:
     def upload(self, key, data, content_type="image/png"):
         """Store raw bytes under the given key."""
         self.client.put_object(
-            Bucket=self.bucket, Key=key, Body=data, ContentType=content_type
+            Bucket=self.bucket,
+            Key=key,
+            Body=data,
+            ContentType=content_type
         )
         log.info("uploaded %s (%d bytes)", key, len(data))
 
