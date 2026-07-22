@@ -1,0 +1,44 @@
+x-common: &common
+  restart: unless-stopped
+  deploy:
+    resources:
+      limits:
+        cpus: '0.25'
+        memory: 256M
+
+name: image-upscaler-load-test
+services:
+  rabbitmq:
+    <<: *common
+    container_name: image-upscaler-load-test-rabbitmq
+    image: rabbitmq:4.3.2-management
+    environment:
+      RABBITMQ_DEFAULT_USER: rabbitmq
+      RABBITMQ_DEFAULT_PASS: password
+    ports:
+      - "5672:5672" # AMQP
+      - "15672:15672" # management UI (http://localhost:15672)
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  scheduler:
+    <<: *common
+    container_name: image-upscaler-load-test-scheduler
+    build:
+      context: ./scheduler
+      dockerfile: Dockerfile
+
+  workers:
+    container_name: image-upscaler-load-test-workers
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
