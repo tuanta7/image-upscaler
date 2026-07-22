@@ -20,6 +20,8 @@ import numpy as np
 import torch
 from torch import nn
 
+from app.handler.base import UpscaleHandler
+
 log = logging.getLogger(__name__)
 
 UPSCALE_SCALE = int(os.environ.get("UPSCALE_SCALE", "3"))
@@ -64,10 +66,7 @@ class FSRCNN(nn.Module):
         return self.last_part(x)
 
 
-
-
-
-class Upscaler:
+class FSRCNNUpscaler(UpscaleHandler):
     """An FSRCNN model loaded once, ready to upscale many images."""
 
     def __init__(self, scale=UPSCALE_SCALE, weights=WEIGHTS_PATH):
@@ -108,16 +107,6 @@ class Upscaler:
         # Step 4: merge brightness and color back into a normal image.
         return cv2.cvtColor(big, cv2.COLOR_YCrCb2BGR)
 
-    def upscale_bytes(self, data, ext=".png"):
-        """Upscale an encoded image (raw bytes) and return encoded bytes."""
-        image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
-        if image is None:
-            raise ValueError("could not decode image")
-        result = self.upscale(image)
-        ok, encoded = cv2.imencode(ext, result)
-        if not ok:
-            raise ValueError(f"could not encode result as {ext}")
-        return encoded.tobytes()
 
 if __name__ == "__main__":
     # Standalone smoke test: upscale one file from the command line.
@@ -130,7 +119,7 @@ if __name__ == "__main__":
     parser.add_argument("--weights", default=WEIGHTS_PATH, help="the trained model file (.pth)")
     args = parser.parse_args()
 
-    upscaler = Upscaler(scale=args.scale, weights=args.weights)
+    upscaler = FSRCNNUpscaler(scale=args.scale, weights=args.weights)
 
     originalImage = cv2.imread(args.input)
     if  originalImage is None:
