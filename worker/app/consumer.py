@@ -5,6 +5,7 @@ import time
 
 import pika
 import pika.exceptions
+from botocore.exceptions import ClientError, EndpointConnectionError
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ class Consumer:
         log.info("processing task %s", task.get("task_id", "<no id>"))
         try:
             self.handler(task)
-        except Exception:
+        except (ClientError, EndpointConnectionError):
             log.exception("task failed: %s", task.get("task_id", "<no id>"))
             channel.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
         else:
