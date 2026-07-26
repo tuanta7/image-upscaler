@@ -1,122 +1,80 @@
 # Image Upscaler
 
-Project to learn how to implement a task scheduler using RabbitMQ, including:
-
-- Retry failed jobs
-- Dead-letter queue for permanently failed jobs
-- Idempotency, avoid duplicate processing
-- Priority queue (paid users vs. free users?)
-- Rate limiting on uploads
-- Progress updates (queued, processing, completed)
-- Automatic cleanup of temporary files
+Project to learn how to implement a task scheduler using RabbitMQ.
 
 ## Design
 
-Browser gets a session cookie (random ID, temp username, no login yet).
-
 ```mermaid
 flowchart LR
-    UI[Browser UI] -->|POST /process| API[API Server]
-    API -->|upload original| S3[(Object Storage)]
-    API -->|publish job| MQ[[RabbitMQ]]
+    UI[Browser UI] -->|POST /upscale| API[Scheduler API]
+    API -->|upload original| S3[(MinIO / S3)]
+    API -->|publish task| MQ[[upscale.tasks]]
     MQ --> W[Workers]
     W <-->|download / upload| S3
-    W -->|status events| R[(Redis)]
-    R -->|pub/sub| API
+    W -->|status| RQ[[upscale.results]]
+    RQ --> API
+    API <-->|job status| PG[(Postgres)]
     API -->|SSE| UI
 ```
 
-| Component       | Responsibility                                                                   |
-| --------------- | -------------------------------------------------------------------------------- |
-| API server      | Uploads, sessions, rate limiting, SSE, publishing jobs                           |
-| Object storage (MinIO / S3) | Original images and upscaled results                                             |
-| RabbitMQ        | Work queues, retry with backoff, DLQ, priority                                   |
-| Redis           | Job status store, pub/sub for SSE fan-out, idempotency keys, rate-limit counters |
-| Workers         | Consume jobs, download → upscale (libvips/sharp) → upload result                 |
+| Component          | Responsibility                                                                 |
+|--------------------|--------------------------------------------------------------------------------|
+| Scheduler API (Go) | Uploads, publishes tasks, consumes results, SSE fan-out, presigned result URLs |
+| Postgres           | Job status store                                                               |
+| MinIO / S3         | Original images and upscaled results                                           |
+| RabbitMQ           | Two durable queues: tasks in, results out                                      |
+| Workers (Python)   | Consume tasks, download → upscale (FSRCNN) → upload, publish status            |
 
 > [!NOTE]
-> RabbitMQ handles retry, DLQ, and priority but not idempotency or rate limiting.
->
-> RabbitMQ gives at-least-once delivery, which means duplicates are possible by design 
-> (e.g. a worker dies after processing but before ack → message is redelivered).
-> Deduplication and rate limiting are application concerns; Redis is here for that.
+> No Redis — deliberately, for now. SSE fan-out is in-process
+> (`scheduler/internal/upscale/hub.go`), so it only works with a single
+> scheduler replica; move it to Redis pub/sub if the scheduler ever needs
+> to scale out. There's also no idempotency lock or rate limiting yet —
+> RabbitMQ's at-least-once delivery means a redelivered task just re-runs,
+> which is harmless today only because results overwrite the same
+> deterministic key.
 
 ### API
 
-| Endpoint         | Description                                  |
-| ---------------- | -------------------------------------------- |
-| `POST /process`  | multipart `image` + `scale` → `202 {job_id}` |
-| `GET /jobs/{id}` | status + result URL (session-scoped)         |
-| `GET /events`    | SSE stream of job events for this session    |
+| Endpoint                | Description                                                    |
+|--------------------------|-----------------------------------------------------------------|
+| `POST /upscale`          | multipart `image` + `scale` → `{task_id}`                       |
+| `GET /tasks/{id}/events` | SSE stream of status (sends current status immediately, then updates until `done`/`failed`) |
+| `GET /tasks/{id}/result` | presigned URL for the upscaled image                             |
 
 ### Happy Path
 
-`POST /process` (multipart: image + scale):
+`POST /upscale`:
 
-- Rate-limit check (token bucket in Redis, keyed by session/IP)
-- Validate file type/size, upload original to object storage
-- Create job record in Redis: `job:{id} = {status: queued, session, scale, key}`
-- Publish message `{job_id, object_key, scale}` — **persistent delivery mode + publisher confirm** — then return `202 {job_id}`
+- Upload the original to S3 (`uploads/{id}.png`)
+- Insert a job row in Postgres: `status = pending`
+- Publish `{task_id, input_key, output_key, scale}` to `upscale.tasks`, return `{task_id}`
 
-Worker (manual ack, `prefetch=1` so long jobs are fairly dispatched):
+Worker (manual ack, `prefetch=1`):
 
-- Idempotency check: `SET job:{id}:lock NX EX 600`. If it fails, another worker has/had it → ack and skip
-- Set status `processing`, download, upscale, upload result to a **deterministic key** (`results/{job_id}.png`) so reprocessing overwrites instead of duplicating
-- Set status `completed` + result URL, publish event to Redis pub/sub, **ack last**
-- Result is served via a pre-signed URL, only to the session that created the job.
+- Publish `processing` to `upscale.results`
+- Download, upscale with FSRCNN at the requested scale, upload to a **deterministic key** (`results/{task_id}.png`)
+- On success: ack, publish `done`. On failure: reject (no requeue), publish `failed` — no retry, no DLQ yet
 
-API server is subscribed to the pub/sub channel and pushes events over `GET /events` (SSE), filtered to the requesting session. On SSE reconnect/refresh, `GET /jobs/{id}` reads current state from Redis
+Scheduler consumes `upscale.results`, updates the Postgres job row, and fans the status out to any SSE subscribers via the in-memory hub. On SSE (re)connect, the handler first reads current status from Postgres so a client that connects after the event fired still gets the right state.
 
 ### Queue Topology
 
+Two plain durable queues, no exchanges:
+
 ```
-exchange: upscale.work (direct)
-├── queue: upscale.jobs.paid      ← more consumers
-└── queue: upscale.jobs.free      ← fewer consumers
-
-exchange: upscale.retry (direct)
-└── queue: upscale.retry.30s      x-message-ttl: 30000
-                                  x-dead-letter-exchange: upscale.work
-
-queue: upscale.dlq                (parking lot, no TTL — inspected manually)
+queue: upscale.tasks     — one message per task
+queue: upscale.results   — status updates (processing / done / failed)
 ```
 
-#### Priority: two queues instead of `x-max-priority`
+No priority, retry-with-backoff, or dead-letter queue yet. Messages aren't published with the persistent delivery mode or publisher confirms either, and a failed task's reject just drops it — there's no DLQ to catch it. These are the next things to build, not accidental gaps:
 
-A single priority queue is simpler to declare but risks starving free users under load, and priority support on quorum queues is limited. Two queues with weighted consumer counts (e.g. 3 paid / 1 free) guarantee free jobs always make progress. Routing key = user tier.
+- **Priority**: split into two queues (paid / free) with weighted consumer counts instead of `x-max-priority`, so free jobs can't be starved under load. A single priority queue is simpler to declare but priority support on quorum queues is limited.
+- **Retry**: `nack(requeue=true)` retries immediately and forever — a hot loop with no backoff. Instead, reject without requeue and let a TTL queue (`upscale.retry.30s`, dead-letter back to `upscale.tasks`) delay the redelivery. Track attempts via the `x-death` header; past a threshold, publish to a DLQ instead of retrying. Only transient errors (storage timeout, OOM) should retry — permanent ones (corrupt image, unsupported format) should go straight to the DLQ.
+- **Idempotency / rate limiting**: need a shared store for a per-task lock and per-session/IP counters. Deferred until it's actually needed — see the Redis note above.
+- **Cleanup**: a bucket lifecycle rule (expire `uploads/`/`results/` after 24h) as the safety net, plus eager deletion of the original once the result is written.
 
-#### Retry: TTL + dead-letter shovel, not nack-requeue
-
-`nack(requeue=true)` retries immediately and forever (hot loop, no backoff). Instead the worker does `nack(requeue=false)`; the queue's DLX routes the message to `upscale.retry.30s`, where it sits until TTL expires and gets dead-lettered _back_ to the work exchange.
-
-The `x-death` header counts the round trips — when attempts ≥ 3, the worker publishes the message to `upscale.dlq` instead of nack-ing.
-
-- For exponential backoff, add tiers (`retry.30s`, `retry.2m`, `retry.10m`), per-queue TTL must be fixed, because a message with a long TTL at the head of the queue would block expired messages behind it.
-- **Distinguish failure types.** Retry only _transient_ errors (storage timeout, OOM). Permanent errors (corrupt image, unsupported format) go straight to the DLQ.
-
-### Durability & Delivery Guarantees
-
-- Durable exchanges/queues + persistent messages: jobs survive broker restart.
-- Publisher confirms on the API side: `202` is only returned after the broker confirms.
-- Manual ack **after** the result is uploaded, never on receipt — a worker crash mid-job means redelivery, and the idempotency lock + deterministic result key make redelivery safe.
-
-### Progress Updates
-
-Worker → Redis (`HSET job:{id} status …` + `PUBLISH job-events`) → API → SSE.
-
-Why not push status through RabbitMQ? It works (fanout exchange, one auto-delete queue
-per API instance), but Redis pub/sub is simpler and we already need Redis as the status
-store — SSE consumers can drop messages harmlessly since `GET /jobs/{id}` always has
-the authoritative state.
-
-Status granularity: `queued → processing → completed | failed`, optionally with retry count (`queued (attempt 2/3)`).
-
-### Cleanup
-
-- Bucket lifecycle rule: everything under `uploads/` and `results/` expires after 24 h. this is the safety net that always runs, even if the app is down.
-- Eager cleanup: worker deletes the original after the result is written; API deletes the result key from Redis with `EXPIRE job:{id} 86400` so job records vanish with files.
-
-## RabbitMQ vs Kafka
+## RabbitMQ vs. Kafka
 
 RabbitMQ is a traditional message broker (smart router) with granular per-message control: ack, nack, requeue, dead-letter, TTL, priority. It pushes messages to consumers and deletes them once acknowledged.
 

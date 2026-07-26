@@ -4,7 +4,7 @@ The main idea behind Work Queues (or Task Queues) is to avoid doing a resource-i
 
 This concept is especially useful in web applications where it's impossible to handle a complex task during a short HTTP request window.
 
-## 1. Publishing Messages
+## 1. Scheduler
 
 ```go
 err = ch.PublishWithContext(ctx,
@@ -19,7 +19,7 @@ err = ch.PublishWithContext(ctx,
 })
 ```
 
-## 2. Consuming Messages
+## 2. Workers
 
 The Qos (Quality of Service) method controls how many messages the broker will deliver to a consumer before it must acknowledge them.
 
@@ -57,14 +57,14 @@ go func() {
 }()
 ```
 
-## 4. Consumer Acknowledgements and Publisher Confirms
+## 3. Delivery Guarantees
 
 When registering a consumer, applications can choose one of two delivery modes
 
 - Automatic (deliveries require no acknowledgement, a.k.a. "fire and forget")
 - Manual (deliveries require client acknowledgement)
 
-### 4.1. Fire-and-forget
+### Fire-and-forget (At-most-once)
 
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -99,14 +99,16 @@ if err != nil {
 }
 ```
 
-### 4.2. Client Acknowledgements
+### Client Acknowledgements (At-least-once)
 
 Publisher confirms and consumer delivery acknowledgements are very similar features that solve similar problems in different contexts. However, they are entirely orthogonal and unaware of each other.
 
 - Publisher confirms cover publisher communication with RabbitMQ
 - Consumer acknowledgements cover RabbitMQ communication with consumers. The goal is to confirm to a RabbitMQ node that a given delivery was successfully received and processed successfully, so the delivered message can be marked for future deletion.
 
-#### 📢 Publisher Confirms
+### 4. Consumer Acknowledgements and Publisher Confirms
+
+#### Publisher Confirms
 
 Confirm mode introduces a round‑trip but removes the need for transactions and is the canonical reliability mechanism. An exclusive goroutine per publisher is recommended.
 
@@ -129,10 +131,10 @@ if !confirm.Ack {
 }
 ```
 
-#### 🖥️ Consumer Acknowledgements
+#### Consumer Acknowledgements
 
 The AMQP 0‑9‑1 protocol delivers each message with a delivery‑tag that identifies the position of that delivery on its channel.
-After a message has been processed the client must decide one of three actions: `Ack`, `Nack` or `Reject`
+After a message has been processed the client must decide one of three actions: `ack`, `nack` or `reject`
 
 ```go
 deliveries, err := ch.Consume(q, "", false, false, false, false, nil)

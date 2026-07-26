@@ -5,18 +5,19 @@ import time
 
 import pika
 import pika.exceptions
-from botocore.exceptions import ClientError, EndpointConnectionError
 
 log = logging.getLogger(__name__)
 
 RABBITMQ_URL = os.environ.get("RABBITMQ_URL", "amqp://rabbitmq:password@localhost:5672/")
 TASK_QUEUE = os.environ.get("TASK_QUEUE", "upscale.tasks")
+RESULTS_QUEUE = os.environ.get("RESULTS_QUEUE", "upscale.results")
 
 class Consumer:
-    def __init__(self, handler, url=RABBITMQ_URL, queue=TASK_QUEUE):
+    def __init__(self, handler, url=RABBITMQ_URL, queue=TASK_QUEUE, results_queue=RESULTS_QUEUE):
         self.handler = handler
         self.url = url
         self.queue = queue
+        self.results_queue = results_queue
 
     def run(self):
         """Consume forever, reconnecting when the broker drops us."""
@@ -44,6 +45,7 @@ class Consumer:
 
         # durable=True: tasks survive a broker restart.
         channel.queue_declare(queue=self.queue, durable=True)
+        channel.queue_declare(queue=self.results_queue, durable=True)
 
         # prefetch_count=1: don't grab a second task while we are still
         # busy with one. This is what spreads work across workers.
@@ -56,6 +58,16 @@ class Consumer:
         finally:
             connection.close()
 
+    def _publish_status(self, channel, task_id, status):
+        if not task_id:
+            return
+        channel.basic_publish(
+            exchange="",
+            routing_key=self.results_queue,
+            body=json.dumps({"task_id": task_id, "status": status}),
+            properties=pika.BasicProperties(content_type="application/json"),
+        )
+
     def _process(self, channel, method, properties, body):
         try:
             task = json.loads(body)
@@ -66,14 +78,21 @@ class Consumer:
             channel.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
             return
 
-        log.info("processing task %s", task.get("task_id", "<no id>"))
+        task_id = task.get("task_id")
+        log.info("processing task %s", task_id or "<no id>")
+        self._publish_status(channel, task_id, "processing")
         try:
             self.handler(task)
-        except (ClientError, EndpointConnectionError):
-            log.exception("task failed: %s", task.get("task_id", "<no id>"))
+        except Exception:
+            # The handler is a plugged-in model + S3 calls -- anything from
+            # a corrupt upload to a transient S3 error can land here. One
+            # bad task must not take the whole worker down with it.
+            log.exception("task failed: %s", task_id or "<no id>")
             channel.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
+            self._publish_status(channel, task_id, "failed")
         else:
             channel.basic_ack(delivery_tag=method.delivery_tag)
+            self._publish_status(channel, task_id, "done")
 
 
 if __name__ == "__main__":

@@ -7,7 +7,8 @@ Expected task message (JSON):
     {
         "task_id": "abc123",
         "input_key": "uploads/photo.png",
-        "output_key": "results/photo.png"
+        "output_key": "results/photo.png",
+        "scale": 3
     }
 """
 
@@ -21,22 +22,26 @@ load_dotenv()
 from app.consumer import Consumer
 from app.storage_client import Storage
 from app.handler.base import UpscaleHandler
-from app.handler.fsrcnn import FSRCNNUpscaler
+from app.handler.fsrcnn import FSRCNNUpscaler, UPSCALE_SCALE
 
 log = logging.getLogger(__name__)
 
+SUPPORTED_SCALES = (2, 3, 4)
 
-def make_handler(storage: Storage, upscaler: UpscaleHandler):
+
+def make_handler(storage: Storage, upscalers: dict[int, UpscaleHandler]):
     """Build the task handler that ties storage and the model together."""
 
     def handle(task):
         input_key = task["input_key"]
         output_key = task["output_key"]
+        scale = task.get("scale", UPSCALE_SCALE)
+        upscaler = upscalers.get(scale, upscalers[UPSCALE_SCALE])
 
         data = storage.download(input_key)
         result = upscaler.upscale_bytes(data)
         storage.upload(output_key, result)
-        log.info("upscaled %s -> %s", input_key, output_key)
+        log.info("upscaled %s -> %s (scale=%d)", input_key, output_key, scale)
 
     return handle
 
@@ -52,12 +57,15 @@ def main():
     storage = Storage()
     storage.ensure_bucket()
 
-    # Load the model once at startup, not once per task.
-    # Swap FSRCNNUpscaler() for another UpscaleHandler implementation to change models.
-    upscaler = FSRCNNUpscaler()
+    # Load one model per supported scale at startup, not once per task,
+    # so a task's requested scale can be honored without a reload.
+    upscalers = {
+        scale: FSRCNNUpscaler(scale=scale, weights=f"weights/fsrcnn_x{scale}.pth")
+        for scale in SUPPORTED_SCALES
+    }
     log.info("worker ready")
 
-    consumer = (Consumer(handler=make_handler(storage, upscaler)))
+    consumer = (Consumer(handler=make_handler(storage, upscalers)))
     consumer.run()
 
 
