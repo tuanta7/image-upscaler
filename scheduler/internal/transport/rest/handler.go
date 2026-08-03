@@ -32,6 +32,11 @@ func NewUpscaleHandler(uc UpscaleUC) *UpscaleHandler {
 	}
 }
 
+// PublishStatus fans a status update out to any SSE client watching the task.
+func (h *UpscaleHandler) PublishStatus(taskID, status string) {
+	h.sseHub.Publish(taskID, status)
+}
+
 func (h *UpscaleHandler) Upscale(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		http.Error(w, "invalid form: "+err.Error(), http.StatusBadRequest)
@@ -105,7 +110,7 @@ func (h *UpscaleHandler) Events(w http.ResponseWriter, r *http.Request) {
 		case newStatus := <-statusCh:
 			_, _ = fmt.Fprintf(w, "data: %s\n\n", newStatus)
 			flusher.Flush()
-			if status == "done" || status == "failed" {
+			if newStatus == "done" || newStatus == "failed" {
 				return
 			}
 		}

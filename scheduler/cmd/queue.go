@@ -35,8 +35,7 @@ func consumeResults(conn *amqp.Connection, handler func([]byte)) error {
 		return err
 	}
 
-	select {
-	case msg := <-results:
+	for msg := range results {
 		handler(msg.Body)
 	}
 

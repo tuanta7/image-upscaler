@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 
@@ -65,7 +66,20 @@ func main() {
 	router := transport.NewRouter(handler)
 
 	go func() {
-		err = consumeResults(conn, nil)
+		err := consumeResults(conn, func(body []byte) {
+			var result struct {
+				TaskID string `json:"task_id"`
+				Status string `json:"status"`
+			}
+			if err := json.Unmarshal(body, &result); err != nil {
+				log.Printf("decode result message: %v", err)
+				return
+			}
+			if err := uc.UpdateJobStatus(ctx, result.TaskID, result.Status); err != nil {
+				log.Printf("update job %s status: %v", result.TaskID, err)
+			}
+			handler.PublishStatus(result.TaskID, result.Status)
+		})
 		if err != nil {
 			log.Fatalf("consume results queue: %v", err)
 		}
