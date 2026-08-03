@@ -14,6 +14,7 @@ Expected task message (JSON):
 
 import logging
 import os
+import time
 
 from dotenv import load_dotenv
 
@@ -27,6 +28,7 @@ from app.handler.fsrcnn import FSRCNNUpscaler, UPSCALE_SCALE
 log = logging.getLogger(__name__)
 
 SUPPORTED_SCALES = (2, 3, 4)
+FAKE_DELAY = float(os.environ.get("FAKE_DELAY", 5))
 
 
 def make_handler(storage: Storage, upscalers: dict[int, UpscaleHandler]):
@@ -39,6 +41,7 @@ def make_handler(storage: Storage, upscalers: dict[int, UpscaleHandler]):
         upscaler = upscalers.get(scale, upscalers[UPSCALE_SCALE])
 
         data = storage.download(input_key)
+        time.sleep(FAKE_DELAY)  # fake latency to exercise the status UI
         result = upscaler.upscale_bytes(data)
         storage.upload(output_key, result)
         log.info("upscaled %s -> %s (scale=%d)", input_key, output_key, scale)
