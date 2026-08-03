@@ -2,6 +2,8 @@
 
 Project to learn how to implement a task scheduler using RabbitMQ.
 
+![](./demo.png)
+
 ## Design
 
 ```mermaid
