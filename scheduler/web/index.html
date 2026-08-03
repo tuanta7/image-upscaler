@@ -25,21 +25,24 @@
   button {
     padding: 0.5rem 1.25rem;
   }
-  #status {
+  #newStatus {
     margin-top: 1.5rem;
     padding: 0.75rem 1rem;
     border: 1px solid;
     white-space: pre-wrap;
   }
-  #status:empty {
+  #newStatus:empty {
     display: none;
   }
   #compare {
-    position: relative;
     display: none;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
     align-self: stretch;
     margin-top: 1rem;
-    line-height: 0;
+  }
+  #compare figure {
+    margin: 0;
   }
   #compare img {
     display: block;
@@ -47,17 +50,13 @@
     max-height: 24rem;
     object-fit: contain;
   }
-  #resultImg {
-    position: absolute;
-    top: 0;
-    left: 0;
-    display: none;
-    clip-path: inset(0 50% 0 0);
+  #compare figcaption {
+    margin-top: 0.25rem;
+    font-size: 0.875rem;
+    color: #666;
   }
-  #slider {
+  #resultFig {
     display: none;
-    width: 100%;
-    margin-top: 0.5rem;
   }
 </style>
 </head>
@@ -69,10 +68,15 @@
       <input type="file" name="image" accept="image/*" required>
     </label>
     <div id="compare">
-      <img id="preview" alt="original">
-      <img id="resultImg" alt="upscaled">
+      <figure>
+        <img id="preview" alt="original">
+        <figcaption>original</figcaption>
+      </figure>
+      <figure id="resultFig">
+        <img id="resultImg" alt="upscaled">
+        <figcaption>upscaled</figcaption>
+      </figure>
     </div>
-    <input id="slider" type="range" min="0" max="100" value="50">
     <label>
       Scale
       <select name="scale">
@@ -83,52 +87,45 @@
     </label>
     <button type="submit">Upscale</button>
   </form>
-  <div id="status"></div>
+  <div id="newStatus"></div>
   <script>
     const fileInput = document.querySelector('input[type=file]');
     const compare = document.getElementById('compare');
     const preview = document.getElementById('preview');
     const resultImg = document.getElementById('resultImg');
-    const slider = document.getElementById('slider');
-    const status = document.getElementById('status');
+    const resultFig = document.getElementById('resultFig');
+    const newStatus = document.getElementById('newStatus');
     const form = document.getElementById('upscaleForm');
 
     fileInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
-      resultImg.style.display = 'none';
-      slider.style.display = 'none';
-      status.textContent = '';
+      resultFig.style.display = 'none';
+      newStatus.textContent = '';
       preview.src = file ? URL.createObjectURL(file) : '';
-      compare.style.display = file ? 'block' : 'none';
-    });
-
-    slider.addEventListener('input', () => {
-      resultImg.style.clipPath = `inset(0 ${100 - slider.value}% 0 0)`;
+      compare.style.display = file ? 'grid' : 'none';
     });
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      status.textContent = 'uploading...';
-      resultImg.style.display = 'none';
-      slider.style.display = 'none';
+      newStatus.textContent = 'uploading...';
+      resultFig.style.display = 'none';
 
       const res = await fetch('/upscale', { method: 'POST', body: new FormData(form) });
       if (!res.ok) {
-        status.textContent = 'failed to schedule task: ' + await res.text();
+        newStatus.textContent = 'failed to schedule task: ' + await res.text();
         return;
       }
       const { task_id } = await res.json();
 
       const events = new EventSource(`/tasks/${task_id}/events`);
       events.onmessage = async (e) => {
-        status.textContent = e.data;
+        newStatus.textContent = e.data;
         if (e.data === 'done') {
           events.close();
           const r = await fetch(`/tasks/${task_id}/result`);
           const { url } = await r.json();
           resultImg.src = url;
-          resultImg.style.display = 'block';
-          slider.style.display = 'block';
+          resultFig.style.display = 'block';
         } else if (e.data === 'failed') {
           events.close();
         }
