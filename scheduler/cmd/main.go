@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jackc/pgx/v5"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/tuanta7/image-upscaler/scheduler/internal/transport/rest"
 
 	"github.com/tuanta7/image-upscaler/scheduler/internal/config"
 	"github.com/tuanta7/image-upscaler/scheduler/internal/transport"
@@ -19,12 +20,6 @@ import (
 func main() {
 	ctx := context.Background()
 	cfg := config.Load()
-
-	db, err := pgx.Connect(ctx, cfg.DatabaseURL)
-	if err != nil {
-		log.Fatalf("connect postgres: %v", err)
-	}
-	defer db.Close(ctx)
 
 	s3Client := s3.New(s3.Options{
 		BaseEndpoint: aws.String(cfg.S3Endpoint),
@@ -49,33 +44,35 @@ func main() {
 	}
 	defer channel.Close()
 
-	// Declare here so the queue exists even if a worker hasn't started
-	// consuming yet. Otherwise, the default exchange drops the publication.
-	_, err = channel.QueueDeclare(upscale.Queue, true, false, false, false, nil)
-	if err != nil {
+	if err = declareQueue(channel, upscale.TasksQueue); err != nil {
 		log.Fatalf("declare queue: %v", err)
 	}
 
-	if _, err := channel.QueueDeclare(upscale.ResultsQueue, true, false, false, false, nil); err != nil {
+	if err = declareQueue(channel, upscale.ResultsQueue); err != nil {
 		log.Fatalf("declare results queue: %v", err)
 	}
 
-	repo := upscale.NewRepository(db)
+	dbConn, err := pgx.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("connect postgres: %v", err)
+	}
+	defer dbConn.Close(ctx)
+
+	repo := upscale.NewJobRepository(dbConn)
 	storage := upscale.NewStorage(s3Client, cfg.S3Bucket)
 	uc := upscale.NewUseCase(repo, storage, channel)
-
-	results, err := initConsumer(conn)
-	if err != nil {
-		log.Fatalf("consume results queue: %v", err)
-	}
-	go uc.ConsumeResults(ctx, results)
-
-	handler := upscale.NewHandler(uc)
+	handler := rest.NewUpscaleHandler(uc)
 	router := transport.NewRouter(handler)
 
-	addr := ":" + cfg.Port
-	log.Printf("listening on %s", addr)
-	if err := http.ListenAndServe(addr, router); err != nil {
+	go func() {
+		err = consumeResults(conn, nil)
+		if err != nil {
+			log.Fatalf("consume results queue: %v", err)
+		}
+	}()
+
+	log.Printf("listening on %s", cfg.BindAddr)
+	if err := http.ListenAndServe(cfg.BindAddr, router); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
 }

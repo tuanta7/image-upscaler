@@ -8,7 +8,7 @@ import (
 )
 
 type EnvConfig struct {
-	Port        string `envconfig:"PORT" default:"7031"`
+	BindAddr    string `envconfig:"BIND_ADDR" default:":7031"`
 	DatabaseURL string `envconfig:"DATABASE_URL" required:"true"`
 	RabbitMQURL string `envconfig:"RABBITMQ_URL" required:"true"`
 	S3Endpoint  string `envconfig:"S3_ENDPOINT" required:"true"`

@@ -1,19 +1,16 @@
-package upscale
+package sse
 
 import "sync"
 
-// Hub fans a job's status updates out to whoever is watching it over SSE.
-//
-// ponytail: in-memory only, so it doesn't work across scheduler replicas —
-// move to Redis pub/sub (or have subscribers poll the DB) if the scheduler
-// ever runs more than one instance.
 type Hub struct {
 	mu   sync.Mutex
 	subs map[string][]chan string
 }
 
 func NewHub() *Hub {
-	return &Hub{subs: make(map[string][]chan string)}
+	return &Hub{
+		subs: make(map[string][]chan string),
+	}
 }
 
 func (h *Hub) Subscribe(taskID string) (<-chan string, func()) {
@@ -47,6 +44,9 @@ func (h *Hub) Publish(taskID, status string) {
 		select {
 		case ch <- status:
 		default:
+			// ponytail: buffer of 1, a slow client drops updates.
+			// The client re-reads status from the DB on reconnect,
+			// so widen the buffer only if that stops being enough.
 		}
 	}
 }

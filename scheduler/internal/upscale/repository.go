@@ -7,18 +7,21 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-var psql = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar)
-
-type Repository struct {
-	db *pgx.Conn
+type JobRepository struct {
+	dbClient     *pgx.Conn
+	queryBuilder squirrel.StatementBuilderType
 }
 
-func NewRepository(db *pgx.Conn) *Repository {
-	return &Repository{db: db}
+func NewJobRepository(conn *pgx.Conn) *JobRepository {
+	return &JobRepository{
+		dbClient:     conn,
+		queryBuilder: squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar),
+	}
 }
 
-func (r *Repository) CreateJob(ctx context.Context, job Job) error {
-	sql, args, err := psql.Insert("jobs").
+func (r *JobRepository) Create(ctx context.Context, job Job) error {
+	sql, args, err := r.queryBuilder.
+		Insert("jobs").
 		Columns("id", "status").
 		Values(job.ID, job.Status).
 		ToSql()
@@ -26,25 +29,13 @@ func (r *Repository) CreateJob(ctx context.Context, job Job) error {
 		return err
 	}
 
-	_, err = r.db.Exec(ctx, sql, args...)
+	_, err = r.dbClient.Exec(ctx, sql, args...)
 	return err
 }
 
-func (r *Repository) UpdateStatus(ctx context.Context, id, status string) error {
-	sql, args, err := psql.Update("jobs").
-		Set("status", status).
-		Where(squirrel.Eq{"id": id}).
-		ToSql()
-	if err != nil {
-		return err
-	}
-
-	_, err = r.db.Exec(ctx, sql, args...)
-	return err
-}
-
-func (r *Repository) GetStatus(ctx context.Context, id string) (string, error) {
-	sql, args, err := psql.Select("status").
+func (r *JobRepository) GetStatus(ctx context.Context, id string) (string, error) {
+	sql, args, err := r.queryBuilder.
+		Select("status").
 		From("jobs").
 		Where(squirrel.Eq{"id": id}).
 		ToSql()
@@ -53,6 +44,20 @@ func (r *Repository) GetStatus(ctx context.Context, id string) (string, error) {
 	}
 
 	var status string
-	err = r.db.QueryRow(ctx, sql, args...).Scan(&status)
+	err = r.dbClient.QueryRow(ctx, sql, args...).Scan(&status)
 	return status, err
+}
+
+func (r *JobRepository) UpdateStatus(ctx context.Context, id, status string) error {
+	sql, args, err := r.queryBuilder.
+		Update("jobs").
+		Set("status", status).
+		Where(squirrel.Eq{"id": id}).
+		ToSql()
+	if err != nil {
+		return err
+	}
+
+	_, err = r.dbClient.Exec(ctx, sql, args...)
+	return err
 }
